@@ -111,14 +111,34 @@ export class ParticipantService {
     // Filter out participants with no data for analysis, but keep them in the list
     const participantsWithData = participants.filter((p: Participant) => p.linkedinData);
     
+    console.log(`[ParticipantService] ${participantsWithData.length} of ${participants.length} participants have LinkedIn data`);
+    
     // If no LinkedIn data found, still analyze based on names/companies
     const participantsToAnalyze = participantsWithData.length > 0 
       ? participantsWithData 
       : participants; // Fallback to all participants even without LinkedIn data
 
-    const [heavyHitters] = await Promise.all([
-      this.llmAnalyzer.identifyHeavyHitters(participantsToAnalyze),
-    ]);
+    let heavyHitters: Participant[] = [];
+    try {
+      heavyHitters = await this.llmAnalyzer.identifyHeavyHitters(participantsToAnalyze);
+      console.log(`[ParticipantService] LLM returned ${heavyHitters.length} heavy hitters`);
+    } catch (error) {
+      console.error('[ParticipantService] Error identifying heavy hitters:', error);
+      // Fallback: return all participants with a default score
+      heavyHitters = participantsToAnalyze.map((p, idx) => ({
+        ...p,
+        score: 1 - (idx * 0.05), // Decreasing score based on order
+      }));
+    }
+    
+    // If LLM returned empty, use fallback
+    if (heavyHitters.length === 0) {
+      console.log('[ParticipantService] LLM returned empty, using fallback');
+      heavyHitters = participantsToAnalyze.slice(0, 15).map((p, idx) => ({
+        ...p,
+        score: 1 - (idx * 0.05),
+      }));
+    }
 
     onProgress?.({
       stage: 'Generating talking points',

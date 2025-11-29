@@ -13,6 +13,11 @@ function getOpenAIClient() {
 
 export class LLMAnalyzer {
   async identifyHeavyHitters(participants: Participant[]): Promise<Participant[]> {
+    if (participants.length === 0) {
+      console.log('[LLM] No participants to analyze');
+      return [];
+    }
+
     const prompt = `Analyze these hackathon participants and rank them by job prestige, industry influence, and career achievements.
 
 Participants:
@@ -25,7 +30,7 @@ ${idx + 1}. ${p.name}
    - Skills: ${p.linkedinData?.skills?.slice(0, 10).join(', ') || 'None'}
 `).join('\n')}
 
-Return a JSON object with a "rankings" array of participant names ranked from most prestigious/influential to least, with a brief reasoning for each top 10. Format:
+Return a JSON object with a "rankings" array of ALL participant names ranked from most prestigious/influential to least, with a brief reasoning for each. Even if you don't have much info, still rank them. Format:
 {
   "rankings": [
     {"name": "Name", "reasoning": "Why they're influential", "score": 0.95}
@@ -34,6 +39,8 @@ Return a JSON object with a "rankings" array of participant names ranked from mo
 
     try {
       const openai = getOpenAIClient();
+      console.log(`[LLM] Analyzing ${participants.length} participants...`);
+      
       const response = await openai.chat.completions.create({
         model: 'gpt-4o',
         messages: [{ role: 'user', content: prompt }],
@@ -42,20 +49,33 @@ Return a JSON object with a "rankings" array of participant names ranked from mo
 
       const result = JSON.parse(response.choices[0].message.content || '{}');
       const rankings = result.rankings || [];
+      
+      console.log(`[LLM] Received ${rankings.length} rankings from OpenAI`);
 
       // Map rankings back to participants
-      return rankings
+      const rankedParticipants = rankings
         .map((r: any) => {
-          const participant = participants.find(p => p.name === r.name);
+          const participant = participants.find(p => 
+            p.name.toLowerCase() === r.name?.toLowerCase() ||
+            p.name.toLowerCase().includes(r.name?.toLowerCase()) ||
+            r.name?.toLowerCase().includes(p.name.toLowerCase())
+          );
           if (participant) {
-            return { ...participant, score: r.score };
+            return { ...participant, score: r.score || 0.5 };
           }
           return null;
         })
         .filter(Boolean) as Participant[];
+      
+      console.log(`[LLM] Matched ${rankedParticipants.length} participants`);
+      return rankedParticipants;
     } catch (error) {
-      console.error('Error identifying heavy hitters:', error);
-      return [];
+      console.error('[LLM] Error identifying heavy hitters:', error);
+      // Return participants with default scores as fallback
+      return participants.map((p, idx) => ({
+        ...p,
+        score: Math.max(0.5, 1 - (idx * 0.03)),
+      }));
     }
   }
 
@@ -158,6 +178,11 @@ Return as JSON: {"talkingPoints": ["opener 1", "opener 2", ...]}`;
     participants: Participant[],
     teamSize: number = 4
   ): Promise<TeamSuggestion[]> {
+    if (participants.length < 2) {
+      console.log('[LLM] Not enough participants for team suggestions');
+      return [];
+    }
+
     const prompt = `Analyze these hackathon participants and suggest ${teamSize}-person teams with complementary skills:
 
 Participants:
@@ -186,6 +211,8 @@ Return JSON format:
 
     try {
       const openai = getOpenAIClient();
+      console.log(`[LLM] Suggesting teams for ${participants.length} participants...`);
+      
       const response = await openai.chat.completions.create({
         model: 'gpt-4o',
         messages: [{ role: 'user', content: prompt }],
@@ -194,16 +221,22 @@ Return JSON format:
 
       const result = JSON.parse(response.choices[0].message.content || '{}');
       const teams = result.teams || [];
+      
+      console.log(`[LLM] Received ${teams.length} team suggestions`);
 
       return teams.map((team: any) => ({
-        participants: team.participants
-          .map((name: string) => participants.find(p => p.name === name))
+        participants: (team.participants || [])
+          .map((name: string) => participants.find(p => 
+            p.name.toLowerCase() === name?.toLowerCase() ||
+            p.name.toLowerCase().includes(name?.toLowerCase()) ||
+            name?.toLowerCase().includes(p.name.toLowerCase())
+          ))
           .filter(Boolean) as Participant[],
-        reasoning: team.reasoning,
+        reasoning: team.reasoning || 'Complementary skills and backgrounds',
         complementarySkills: team.complementarySkills || [],
-      }));
+      })).filter((team: TeamSuggestion) => team.participants.length >= 2);
     } catch (error) {
-      console.error('Error suggesting teams:', error);
+      console.error('[LLM] Error suggesting teams:', error);
       return [];
     }
   }
